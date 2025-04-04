@@ -35,8 +35,8 @@ DEFAULT_JOB_WORKERS = config["default_job_workers"]
 SCOPES = config.get("scopes", ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"])
 
 # --- Expected headers for results ---
-# Your results sheet column A must have these labels exactly (one per row).
-# Note: "Date and Time" is now the first header.
+# The results sheet column A must have these labels exactly (one per row).
+# "Date and Time" is now the first header.
 EXPECTED_RESULT_HEADERS = [
     "Date and Time", "Run #", "Strategy", "Config", "Epochs", "random-state", "Timerange", "Pairs",
     "loss_function", "Leverage", "% per trade",
@@ -420,6 +420,10 @@ def write_results_to_column(worksheet, data_dict):
         row1 = worksheet.row_values(1)
         target_col = len(row1) + 1
         print(f"Appending data to Column {target_col} (next empty column).")
+        # Before updating, ensure the worksheet has enough columns by resizing if needed.
+        if target_col > worksheet.col_count:
+            worksheet.resize(worksheet.row_count, target_col)
+            print(f"Resized worksheet to {worksheet.row_count} rows and {target_col} columns.")
         # For each row in column A that matches an expected header, update that cell in the target column.
         labels = worksheet.col_values(1)
         cell_list = []
