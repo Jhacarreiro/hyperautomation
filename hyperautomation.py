@@ -414,23 +414,34 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
         traceback.print_exc()
         return None
 
+def find_next_empty_run_column(worksheet):
+    """
+    Procura a primeira coluna vazia na linha 1 a partir da coluna 2.
+    Como os cabeçalhos dos resultados estão na vertical na coluna A,
+    cada coluna de resultado tem os dados correspondentes às linhas dos cabeçalhos.
+    """
+    col = 2
+    while True:
+        cell_val = worksheet.cell(1, col).value
+        if cell_val in [None, ""]:
+            return col
+        col += 1
+
 def write_results_to_column(worksheet, data_dict):
     try:
-        # Read row 1 to determine the next empty column.
-        row1 = worksheet.row_values(1)
-        target_col = len(row1) + 1
-        print(f"Appending data to Column {target_col} (next empty column).")
-        # Before updating, ensure the worksheet has enough columns by resizing if needed.
+        target_col = find_next_empty_run_column(worksheet)
+        print(f"Appending data to Column {target_col} (first empty run column).")
+        # Se a coluna alvo for maior que o número atual de colunas, redimensiona a planilha.
         if target_col > worksheet.col_count:
             worksheet.resize(worksheet.row_count, target_col)
             print(f"Resized worksheet to {worksheet.row_count} rows and {target_col} columns.")
-        # For each row in column A that matches an expected header, update that cell in the target column.
-        labels = worksheet.col_values(1)
+        # Usa os cabeçalhos que estão na coluna A para identificar as linhas de escrita.
+        headers = worksheet.col_values(1)
         cell_list = []
-        for row_index, label in enumerate(labels, start=1):
-            if label in EXPECTED_RESULT_HEADERS:
-                new_value = str(data_dict.get(label, ""))
-                cell_list.append(gspread.Cell(row_index, target_col, new_value))
+        for row_index, header in enumerate(headers, start=1):
+            if header in EXPECTED_RESULT_HEADERS:
+                value = str(data_dict.get(header, ""))
+                cell_list.append(gspread.Cell(row_index, target_col, value))
         if cell_list:
             worksheet.update_cells(cell_list, value_input_option="USER_ENTERED")
         print(f"Successfully wrote results to Column {target_col}.")
