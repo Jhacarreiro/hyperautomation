@@ -1,0 +1,61 @@
+{
+  "service_account_file": "",
+  "results_spreadsheet_id": "",
+  "config_spreadsheet_id": "",
+  "config_worksheet_name": "Script Config",
+  "results_worksheet_name": "HyperOpt Automated",
+  "host_user_data_path": "C:\\git\\Freqtrade",
+  "docker_image": "freqtradeorg/freqtrade:stable",
+  "default_config_filename": "config_hyperopt.json",
+  "freqtrade_user_data_container_path": "/freqtrade/user_data",
+  "hyperopt_results_dir": "hyperopt_results",
+  "hyperopt_show_output_file": "hyperopt_results_output.txt",
+  "default_loss_function": "MultiMetricHyperOptLoss",
+  "default_job_workers": 16,
+  "timeframe_detail": null,
+  "headers": {
+    "config": {
+      "use_config_headers": true,
+      "fields": [
+        "Date and Time",
+        "Run #",
+        "Strategy",
+        "Config",
+        "Epochs",
+        "random-state",
+        "Timerange",
+        "Pairs",
+        "loss_function",
+        "Leverage",
+        "% per trade"
+      ]
+    },
+    "results": {
+      "use_results_headers": true,
+      "fields": [
+        "Trades #",
+        "% Win",
+        "Avg. Profit %",
+        "Profit %",
+        "Duration min",
+        "DrawDown %"
+      ]
+    },
+    "strategy": {
+      "fields": [
+        "ema_fast1_5m",
+        "ema_fast2_5m",
+        "ema_slow_5m",
+        "ema_slow2_5m",
+        "long_volume_threshold_5m",
+        "long_volume_threshold_1h",
+        "long_sl_volume_threshold_exit",
+        "long_tp_volume_threshold_exit",
+        "proximity_threshold",
+        "confirmation_threshold",
+        "scale_in_addition",
+        "max_scale_ins"
+      ]
+    }
+  }
+}
