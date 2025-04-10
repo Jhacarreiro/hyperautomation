@@ -158,8 +158,9 @@ def run_hyperopt_docker(run_params):
         "--epochs", run_params["epochs"],
         "--timerange", run_params["timerange"]
     ]
+    # Modified to split the spaces string into separate arguments
     if "spaces" in run_params:
-        docker_command.extend(["--spaces", run_params["spaces"]])
+        docker_command.extend(["--spaces"] + run_params["spaces"].split())
     if "jobs" in run_params:
         docker_command.extend(["-j", run_params["jobs"]])
     else:
@@ -214,7 +215,7 @@ def run_hyperopt_show_docker(config_filename, results_filename_host, strategy_na
         DOCKER_IMAGE, "hyperopt-show",
         "--config", config_path_in_container,
         "--hyperopt-filename", results_basename,
-        "--best", "-n", "1", "--no-color"
+        "--best", "-n", "-1", "--no-color"
     ]
     print(f"\n--- Running Docker hyperopt-show: {' '.join(docker_command)} ---")
     try:
@@ -255,6 +256,7 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
     buy_params = {}
     sell_params = {}
     metrics = {header: "N/A" for header in RESULTS_HEADERS}
+    summary_metrics = {}  # Dictionary to hold the entire SUMMARY METRICS table
     try:
         # Parse hyperspace params
         buy_section = []
@@ -304,37 +306,40 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
                     print(f"Warning: Failed parsing sell_params: {e}")
         else:
             print("Warning: Could not find param block marker.")
-
-        print("Parsing SUMMARY METRICS table...")
+        
+        # New block: Parse the entire SUMMARY METRICS table
+        print("Parsing entire SUMMARY METRICS table...")
         in_summary = False
-        summary_found = False
         for line in lines:
             stripped = line.strip()
             if "SUMMARY METRICS" in stripped:
                 in_summary = True
                 continue
-            if not in_summary:
-                continue
-            if not stripped or len(stripped) < 5:
-                continue
-            if "│" in stripped:
-                parts = [p.strip() for p in stripped.split("│") if p.strip()]
-            else:
-                parts = re.split(r'\s{2,}', stripped)
-            if len(parts) >= 2:
-                metric_name, metric_value = parts[0], parts[-1]
-                summary_found = True
-                if "Total/Daily Avg Trades" in metric_name and "Trades #" in RESULTS_HEADERS:
-                    metrics["Trades #"] = metric_value.split("/")[0].strip()
-                elif "Total profit %" in metric_name and "Profit %" in RESULTS_HEADERS:
-                    metrics["Profit %"] = metric_value.replace("%", "").strip()
-                elif "Absolute Drawdown (Account)" in metric_name and "DrawDown %" in RESULTS_HEADERS:
-                    metrics["DrawDown %"] = metric_value.replace("%", "").strip()
-                elif "Market change" in metric_name:
+            if in_summary:
+                # Stop if we reach the bottom border of the table
+                if stripped.startswith("└"):
                     break
-        if not summary_found and RESULTS_HEADERS:
+                # Skip header borders and header rows
+                if stripped.startswith("┏") or stripped.startswith("┡") or stripped.startswith("┃"):
+                    if "Metric" in stripped and "Value" in stripped:
+                        continue
+                    else:
+                        continue
+                if stripped.startswith("│"):
+                    parts = [p.strip() for p in stripped.split("│") if p.strip()]
+                    if len(parts) >= 2:
+                        metric_name = parts[0]
+                        metric_value = parts[-1]
+                        if metric_name:
+                            summary_metrics[metric_name] = metric_value
+        if summary_metrics:
+            print("Parsed entire SUMMARY METRICS table.")
+        else:
             print("Warning: SUMMARY METRICS table not found/parsed.")
-
+        
+        # Merge the summary metrics into our metrics dictionary.
+        metrics.update(summary_metrics)
+        
         print("Parsing BACKTESTING REPORT table for Win%/Avg Profit%...")
         total_row_found = False
         i_line = 0
@@ -369,7 +374,7 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
             i_line += 1
         if not total_row_found and RESULTS_HEADERS:
             print("Warning: TOTAL row not found in BACKTESTING REPORT table.")
-
+        
         parsed_data = {header: "N/A" for header in RESULT_HEADERS}
         if CONFIG_HEADERS:
             parsed_data.update({
@@ -389,7 +394,7 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
             parsed_data[param] = buy_params.get(param, sell_params.get(param, "N/A"))
         if RESULTS_HEADERS:
             parsed_data.update(metrics)
-
+        
         print("Successfully parsed hyperopt-show output.")
         return parsed_data
     except Exception as e:
