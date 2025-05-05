@@ -9,6 +9,8 @@ import time
 import traceback
 import re
 import ast
+import unicodedata
+import shutil
 
 # --- Load external configuration from JSON file ---
 CONFIG_FILE = "hyperautomation_config.json"
@@ -21,7 +23,7 @@ with open(CONFIG_FILE, "r") as f:
 # Configuration values
 SERVICE_ACCOUNT_FILE = config["service_account_file"]
 RESULTS_SPREADSHEET_ID = config["results_spreadsheet_id"]
-RESULTS_WORKSHEET_NAME = config["results_worksheet_name"]  # Now loaded from config
+RESULTS_WORKSHEET_NAME = config["results_worksheet_name"]
 CONFIG_SPREADSHEET_ID = config["config_spreadsheet_id"]
 CONFIG_WORKSHEET_NAME = config["config_worksheet_name"]
 HOST_USER_DATA_PATH = config["host_user_data_path"]
@@ -34,6 +36,10 @@ DEFAULT_LOSS_FUNCTION = config["default_loss_function"]
 DEFAULT_JOB_WORKERS = config["default_job_workers"]
 DEFAULT_TIMEFRAME_DETAIL = config.get("timeframe_detail", None)
 SCOPES = config.get("scopes", ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"])
+
+# --- Path for Strategy Directory ---
+STRATEGY_DIR_HOST_PATH = os.path.join(HOST_USER_DATA_PATH, "strategies")
+NUMBA_CACHE_DIR = os.path.join(STRATEGY_DIR_HOST_PATH, "__pycache__")
 
 # --- Parse headers from config ---
 headers_config = config["headers"]["config"]
@@ -51,12 +57,14 @@ if not RESULT_HEADERS:
     exit(1)
 
 def get_value_from_dict(data_dict, key, default=""):
+    """Retrieve a value from a dictionary with a default if missing or invalid."""
     val = data_dict.get(key)
     if val in [None, "", "#N/A"]:
         return default
     return val
 
 def get_numeric_value(data_dict, key, default="N/A"):
+    """Retrieve a numeric value from a dictionary, converting to int/float if possible."""
     val = data_dict.get(key)
     if val in [None, "", "#N/A"]:
         return default
@@ -69,6 +77,7 @@ def get_numeric_value(data_dict, key, default="N/A"):
         return str(val)
 
 def parse_duration(duration_str):
+    """Convert duration string (e.g., '1:29:00') to minutes."""
     try:
         parts = list(map(int, duration_str.split(":")))
         if len(parts) == 3:
@@ -81,26 +90,29 @@ def parse_duration(duration_str):
         return "N/A"
 
 def authenticate_gsheet():
+    """Authenticate with Google Sheets API using service account credentials."""
     try:
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         client = gspread.authorize(creds)
-        print("GS Auth OK.")
+        print("Google Sheets authentication successful.")
         return client
     except Exception as e:
-        print(f"ERROR: GS Auth failed: {e}")
+        print(f"ERROR: Google Sheets authentication failed: {e}")
         return None
 
 def get_worksheet(client, spreadsheet_id, worksheet_name):
+    """Access a specific worksheet in a Google Spreadsheet."""
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(worksheet_name)
-        print(f"Accessed sheet: '{worksheet_name}'")
+        print(f"Accessed worksheet: '{worksheet_name}'")
         return worksheet
     except Exception as e:
         print(f"ERROR: Cannot open worksheet '{worksheet_name}': {e}")
         return None
 
 def read_hyperopt_runs_from_sheet(config_worksheet):
+    """Read hyperopt run configurations from the config worksheet."""
     print(f"Reading runs from sheet '{config_worksheet.title}'...")
     expected_headers = ["Runs", "Config", "Strategy", "Pairs", "Leverage", "% per trade", "epochs", "spaces", "timerange", "loss_function", "jobs", "min_trades", "random_state", "timeframe_detail"]
     try:
@@ -140,7 +152,21 @@ def read_hyperopt_runs_from_sheet(config_worksheet):
         traceback.print_exc()
         return None
 
+def clear_numba_cache(strategy_name):
+    """Clear the entire Numba cache directory."""
+    cache_dir_path = os.path.join(HOST_USER_DATA_PATH, "strategies", "__pycache__")
+    print(f"Attempting to clear Numba cache at: {cache_dir_path}")
+    if os.path.isdir(cache_dir_path):
+        try:
+            shutil.rmtree(cache_dir_path)
+            print("Successfully cleared Numba cache directory.")
+        except Exception as e:
+            print(f"WARNING: Failed to delete cache directory {cache_dir_path}: {e}")
+    else:
+        print("Numba cache directory not found (or already cleared).")
+
 def run_hyperopt_docker(run_params):
+    """Execute hyperopt command inside a Docker container."""
     strategy_to_run = run_params["strategy_name"]
     config_filename = run_params["config_filename"]
     config_path_in_container = f"{FREQTRADE_USER_DATA_CONTAINER_PATH.rstrip('/')}/{config_filename.lstrip('/')}"
@@ -158,9 +184,11 @@ def run_hyperopt_docker(run_params):
         "--epochs", run_params["epochs"],
         "--timerange", run_params["timerange"]
     ]
-    # Modified to split the spaces string into separate arguments
     if "spaces" in run_params:
-        docker_command.extend(["--spaces"] + run_params["spaces"].split())
+        spaces_to_add = run_params["spaces"].split()
+        if spaces_to_add:
+            docker_command.append("--spaces")
+            docker_command.extend(spaces_to_add)
     if "jobs" in run_params:
         docker_command.extend(["-j", run_params["jobs"]])
     else:
@@ -171,7 +199,7 @@ def run_hyperopt_docker(run_params):
         docker_command.extend(["--random-state", input_random_state])
     if timeframe_detail and timeframe_detail.strip():
         docker_command.extend(["--timeframe-detail", timeframe_detail])
-    print(f"\n--- Running Docker Hyperopt: {' '.join(docker_command)} ---")
+    print(f"\n--- Running Docker Hyperopt: {' '.join(docker_command)}")
     print("--- Freqtrade output streams below (Live) ---")
     captured_random_state = None
     buffer = ""
@@ -207,6 +235,7 @@ def run_hyperopt_docker(run_params):
         return False, input_random_state
 
 def run_hyperopt_show_docker(config_filename, results_filename_host, strategy_name):
+    """Run hyperopt-show command to retrieve detailed results."""
     config_path_in_container = f"{FREQTRADE_USER_DATA_CONTAINER_PATH.rstrip('/')}/{config_filename.lstrip('/')}"
     results_basename = os.path.basename(results_filename_host)
     docker_command = [
@@ -220,45 +249,55 @@ def run_hyperopt_show_docker(config_filename, results_filename_host, strategy_na
     print(f"\n--- Running Docker hyperopt-show: {' '.join(docker_command)} ---")
     try:
         process = subprocess.run(docker_command, capture_output=True, text=True, check=True,
-                                   encoding="utf-8", errors="replace")
+                                encoding="utf-8", errors="replace")
+        stdout = process.stdout
+        if not stdout.strip():
+            print("ERROR: hyperopt-show output is empty.")
+            return None
         print("--- hyperopt-show process completed successfully ---")
-        return process.stdout
+        return stdout
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: hyperopt-show command failed with return code {e.returncode}: {e.stderr}")
+        return None
     except Exception as e:
-        print(f"ERROR: hyperopt-show command failed: {e}")
+        print(f"ERROR: Unexpected error running hyperopt-show: {e}")
         traceback.print_exc()
         return None
 
 def find_latest_hyperopt_result_file(results_dir_host, strategy_name):
+    """Locate the latest hyperopt result file for a given strategy."""
     try:
         print("Waiting 5s for results file...")
         time.sleep(5)
         if not os.path.isdir(results_dir_host):
-            print(f"ERROR: Results dir not found: '{results_dir_host}'.")
+            print(f"ERROR: Results directory not found: '{results_dir_host}'.")
             return None
         search_pattern = os.path.join(results_dir_host, f"strategy_{strategy_name}*.fthypt")
         result_files = glob.glob(search_pattern)
         if not result_files:
-            print(f"Warning: No results files found: '{search_pattern}'.")
+            print(f"Warning: No results files found matching: '{search_pattern}'.")
             return None
         latest_file = max(result_files, key=os.path.getctime)
         print(f"Found results file: {os.path.basename(latest_file)}")
         return latest_file
     except Exception as e:
-        print(f"Error finding results file: {e}")
+        print(f"ERROR: Error finding results file: {e}")
         return None
 
 def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_index, reported_random_state):
+    """Parse hyperopt-show output to extract metrics and parameters."""
     print("Parsing hyperopt-show output...")
     if not show_output_content:
         print("ERROR: No hyperopt-show output content provided.")
         return None
+    # Normalize Unicode characters to handle potential encoding issues
+    show_output_content = unicodedata.normalize('NFKC', show_output_content)
     lines = show_output_content.splitlines()
     buy_params = {}
     sell_params = {}
-    metrics = {header: "N/A" for header in RESULTS_HEADERS}
-    summary_metrics = {}  # Dictionary to hold the entire SUMMARY METRICS table
+    metrics = {}
     try:
-        # Parse hyperspace params
+        # Parse Buy and Sell Parameters
         buy_section = []
         sell_section = []
         in_buy = False
@@ -306,96 +345,141 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
                     print(f"Warning: Failed parsing sell_params: {e}")
         else:
             print("Warning: Could not find param block marker.")
-        
-        # New block: Parse the entire SUMMARY METRICS table
-        print("Parsing entire SUMMARY METRICS table...")
+
+        # Parse SUMMARY METRICS Table
+        print("Attempting to parse SUMMARY METRICS table...")
+        metric_pattern = re.compile(r'│\s*(.*?)\s*│\s*(.*?)\s*│')
         in_summary = False
+        summary_metrics_found = False
         for line in lines:
-            stripped = line.strip()
+            stripped = unicodedata.normalize('NFKC', line.strip())
             if "SUMMARY METRICS" in stripped:
                 in_summary = True
+                print("SUMMARY METRICS table detected.")
                 continue
-            if in_summary:
-                # Stop if we reach the bottom border of the table
-                if stripped.startswith("└"):
-                    break
-                # Skip header borders and header rows
-                if stripped.startswith("┏") or stripped.startswith("┡") or stripped.startswith("┃"):
-                    if "Metric" in stripped and "Value" in stripped:
-                        continue
-                    else:
-                        continue
-                if stripped.startswith("│"):
-                    parts = [p.strip() for p in stripped.split("│") if p.strip()]
-                    if len(parts) >= 2:
-                        metric_name = parts[0]
-                        metric_value = parts[-1]
-                        if metric_name:
-                            summary_metrics[metric_name] = metric_value
-        if summary_metrics:
-            print("Parsed entire SUMMARY METRICS table.")
-        else:
-            print("Warning: SUMMARY METRICS table not found/parsed.")
-        
-        # Merge the summary metrics into our metrics dictionary.
-        metrics.update(summary_metrics)
-        
-        print("Parsing BACKTESTING REPORT table for Win%/Avg Profit%...")
-        total_row_found = False
-        i_line = 0
-        while i_line < len(lines):
-            line = lines[i_line]
-            if line.strip().startswith("│") and "TOTAL" in line:
-                total_row_lines = [line]
-                j = i_line + 1
-                while j < len(lines) and lines[j].strip().startswith("│") and not lines[j].strip().startswith("│ TOTAL"):
-                    total_row_lines.append(lines[j])
-                    j += 1
-                first_line = total_row_lines[0]
-                fields = [p.strip() for p in first_line.split("│") if p.strip()]
-                if len(total_row_lines) > 1:
-                    last_line = total_row_lines[-1]
-                    last_fields = [p.strip() for p in last_line.split("│") if p.strip()]
-                    win_value = last_fields[-1] if last_fields else fields[-1]
-                else:
-                    win_value = fields[-1]
-                if "Trades #" in RESULTS_HEADERS:
-                    metrics["Trades #"] = fields[1]
-                if "Avg. Profit %" in RESULTS_HEADERS:
-                    metrics["Avg. Profit %"] = fields[2].replace("%", "")
-                if "Profit %" in RESULTS_HEADERS:
-                    metrics["Profit %"] = fields[4].replace("%", "")
-                if "Duration min" in RESULTS_HEADERS:
-                    metrics["Duration min"] = parse_duration(fields[5])
-                if "% Win" in RESULTS_HEADERS:
-                    metrics["% Win"] = win_value
-                total_row_found = True
+            if in_summary and stripped.startswith("└"):
+                in_summary = False
                 break
-            i_line += 1
-        if not total_row_found and RESULTS_HEADERS:
-            print("Warning: TOTAL row not found in BACKTESTING REPORT table.")
-        
+            if in_summary and stripped:
+                match = metric_pattern.search(stripped)
+                if match:
+                    key, value = match.group(1).strip(), match.group(2).strip()
+                    if key and value and key != 'Metric':
+                        metrics[key] = value
+                        summary_metrics_found = True
+                        print(f"Parsed metric: {key} = {value}")
+        if not summary_metrics_found:
+            print("WARNING: No metrics parsed from SUMMARY METRICS table.")
+
+        # Parse BACKTESTING REPORT for TOTAL Row
+        print("Attempting to parse BACKTESTING REPORT table...")
+        in_backtesting = False
+        total_lines = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if "BACKTESTING REPORT" in stripped:
+                in_backtesting = True
+                print("BACKTESTING REPORT table detected.")
+                continue
+            if in_backtesting and stripped.startswith("│     TOTAL"):
+                total_lines.append(stripped)
+                for j in range(1, 3):
+                    if i + j < len(lines):
+                        next_line = lines[i + j].strip()
+                        if next_line.startswith("│"):
+                            total_lines.append(next_line)
+                break
+        if total_lines:
+            print(f"Found {len(total_lines)} lines in TOTAL row.")
+            first_line_parts = [p.strip() for p in total_lines[0].split("│") if p.strip()]
+            if len(first_line_parts) >= 7:
+                trades = first_line_parts[1]
+                avg_profit_pct = first_line_parts[2].replace("%", "")
+                tot_profit_usdt = first_line_parts[3]
+                tot_profit_pct = first_line_parts[4].replace("%", "")
+                avg_duration = first_line_parts[5]
+                duration_min = parse_duration(avg_duration)
+                win_pct = "N/A"
+                if len(total_lines) >= 3:
+                    win_pct_line = total_lines[2]
+                    win_pct_parts = [p.strip() for p in win_pct_line.split("│") if p.strip()]
+                    if win_pct_parts:
+                        win_pct = win_pct_parts[-1]
+                metrics["Trades #"] = trades
+                metrics["Avg. Profit %"] = avg_profit_pct
+                metrics["Total profit %"] = tot_profit_pct
+                metrics["Duration min"] = duration_min
+                metrics["% Win"] = win_pct
+                print(f"Parsed BACKTESTING REPORT metrics: Trades #={trades}, Avg. Profit %={avg_profit_pct}, Total profit %={tot_profit_pct}, Duration min={duration_min}, % Win={win_pct}")
+            else:
+                print(f"WARNING: Insufficient columns in BACKTESTING REPORT TOTAL row: {first_line_parts}")
+        else:
+            print("WARNING: No TOTAL row found in BACKTESTING REPORT.")
+
+        # Parse Trailing Stop Parameters
+        print("Attempting to parse Trailing Stop parameters...")
+        trailing_params = {
+            "trailing_stop": "N/A",
+            "trailing_stop_positive": "N/A",
+            "trailing_stop_positive_offset": "N/A",
+            "trailing_only_offset_is_reached": "N/A"
+        }
+        in_trailing = False
+        for line in lines:
+            stripped = line.strip()
+            if "# Trailing stop:" in stripped:
+                in_trailing = True
+                continue
+            if in_trailing:
+                if stripped.startswith("#") or stripped.startswith("max_open_trades"):
+                    in_trailing = False
+                    break
+                match = re.match(r'(\w+)\s*=\s*(.*?)(?:\s*#.*)?$', stripped)
+                if match:
+                    key = match.group(1).strip()
+                    value = match.group(2).strip()
+                    if key in trailing_params:
+                        trailing_params[key] = value
+                        print(f"Parsed trailing param: {key} = {value}")
+        for key, value in trailing_params.items():
+            if key in RESULT_HEADERS:
+                metrics[key] = value
+
+        # Parse Max Open Trades
+        print("Attempting to parse Max Open Trades...")
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("max_open_trades"):
+                match = re.match(r'max_open_trades\s*=\s*(\d+)', stripped)
+                if match:
+                    metrics["Max open trades"] = match.group(1)
+                    print(f"Parsed Max open trades: {match.group(1)}")
+                    break
+
+        # Combine All Parsed Data
         parsed_data = {header: "N/A" for header in RESULT_HEADERS}
-        if CONFIG_HEADERS:
-            parsed_data.update({
-                "Run #": str(run_index),
-                "Strategy": get_value_from_dict(run_params_for_context, "strategy_name", "N/A"),
-                "Config": get_value_from_dict(run_params_for_context, "config_filename", DEFAULT_CONFIG_FILENAME),
-                "Epochs": get_value_from_dict(run_params_for_context, "epochs"),
-                "random-state": reported_random_state if reported_random_state is not None else "N/A",
-                "Timerange": get_value_from_dict(run_params_for_context, "timerange"),
-                "Pairs": get_value_from_dict(run_params_for_context, "Pairs", "N/A"),
-                "loss_function": get_value_from_dict(run_params_for_context, "loss_function", DEFAULT_LOSS_FUNCTION),
-                "Leverage": get_value_from_dict(run_params_for_context, "Leverage", "N/A"),
-                "% per trade": get_value_from_dict(run_params_for_context, "% per trade", "N/A"),
-                "Date and Time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            })
+        parsed_data.update({
+            "Run #": str(run_index),
+            "Strategy": get_value_from_dict(run_params_for_context, "strategy_name", "N/A"),
+            "Config": get_value_from_dict(run_params_for_context, "config_filename", DEFAULT_CONFIG_FILENAME),
+            "Epochs": get_value_from_dict(run_params_for_context, "epochs"),
+            "random-state": reported_random_state if reported_random_state is not None else "N/A",
+            "Timerange": get_value_from_dict(run_params_for_context, "timerange"),
+            "Pairs": get_value_from_dict(run_params_for_context, "Pairs", "N/A"),
+            "loss_function": get_value_from_dict(run_params_for_context, "loss_function", DEFAULT_LOSS_FUNCTION),
+            "Leverage": get_value_from_dict(run_params_for_context, "Leverage", "N/A"),
+            "% per trade": get_value_from_dict(run_params_for_context, "% per trade", "N/A"),
+            "Date and Time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        })
         for param in STRATEGY_HEADERS:
             parsed_data[param] = buy_params.get(param, sell_params.get(param, "N/A"))
-        if RESULTS_HEADERS:
-            parsed_data.update(metrics)
-        
-        print("Successfully parsed hyperopt-show output.")
+        for key, value in metrics.items():
+            if key in RESULT_HEADERS:
+                parsed_data[key] = value
+            else:
+                print(f"Note: Metric '{key}' not in RESULT_HEADERS, skipping.")
+
+        print(f"Parsed {len(metrics)} metrics total.")
         return parsed_data
     except Exception as e:
         print(f"ERROR: Unexpected error during parsing hyperopt-show output: {e}")
@@ -403,6 +487,7 @@ def parse_hyperopt_show_output(show_output_content, run_params_for_context, run_
         return None
 
 def find_next_empty_run_row(worksheet):
+    """Find the next empty row in the worksheet."""
     try:
         all_rows = worksheet.get_all_values()
         return len(all_rows) + 1
@@ -411,6 +496,7 @@ def find_next_empty_run_row(worksheet):
         return worksheet.row_count + 1
 
 def write_results_to_row(worksheet, data_dict):
+    """Write parsed data to the Google Sheet."""
     try:
         target_row = find_next_empty_run_row(worksheet)
         print(f"Appending data to Row {target_row}.")
@@ -425,8 +511,12 @@ def write_results_to_row(worksheet, data_dict):
                 col_index = header_row.index(header) + 1
                 value = str(data_dict.get(header, ""))
                 cell_list.append(gspread.Cell(target_row, col_index, value))
+            else:
+                print(f"WARNING: Header '{header}' not found in sheet header row.")
         if cell_list:
             worksheet.update_cells(cell_list, value_input_option="USER_ENTERED")
+        else:
+            print("WARNING: No cells to update; header mismatch or empty data.")
         print(f"Successfully wrote results to Row {target_row}.")
         return True
     except Exception as e:
@@ -435,6 +525,7 @@ def write_results_to_row(worksheet, data_dict):
         return False
 
 def get_next_run_number(results_worksheet):
+    """Determine the next run number based on existing data."""
     try:
         header_row = results_worksheet.row_values(1)
         if "Run #" not in header_row:
@@ -448,10 +539,7 @@ def get_next_run_number(results_worksheet):
                 run_numbers.append(int(cell))
             except:
                 continue
-        if run_numbers:
-            return max(run_numbers) + 1
-        else:
-            return 1
+        return max(run_numbers) + 1 if run_numbers else 1
     except Exception as e:
         print(f"ERROR: Unable to determine next run number: {e}")
         return 1
@@ -466,7 +554,7 @@ if __name__ == "__main__":
     config_worksheet = get_worksheet(gs_client, CONFIG_SPREADSHEET_ID, CONFIG_WORKSHEET_NAME)
     if not config_worksheet:
         exit(1)
-    results_worksheet = get_worksheet(gs_client, RESULTS_SPREADSHEET_ID, RESULTS_WORKSHEET_NAME)  # Uses config value
+    results_worksheet = get_worksheet(gs_client, RESULTS_SPREADSHEET_ID, RESULTS_WORKSHEET_NAME)
     if not results_worksheet:
         exit(1)
     
@@ -487,6 +575,10 @@ if __name__ == "__main__":
         run_params["run_number"] = current_run_number
         print(f"\n======= RUN {current_run_number} | Strategy: {run_params['strategy_name']} =======")
         
+        # --- Clear Numba Cache Before Run ---
+        print(f"\nClearing Numba cache for strategy: {run_params['strategy_name']}")
+        clear_numba_cache(run_params["strategy_name"])
+        
         run_successful, reported_random_state = run_hyperopt_docker(run_params)
         parsed_result = None
         
@@ -499,14 +591,11 @@ if __name__ == "__main__":
                         with open(HYPEROPT_SHOW_OUTPUT_FILE_HOST, "w", encoding="utf-8") as f:
                             f.write(hyperopt_show_stdout)
                         print(f"Saved hyperopt-show output to: {HYPEROPT_SHOW_OUTPUT_FILE_HOST}")
-                        parsed_result = parse_hyperopt_show_output(hyperopt_show_stdout, run_params, i, reported_random_state)
-                        if parsed_result is not None:
-                            parsed_result["Run #"] = str(current_run_number)
-                        else:
-                            print(f"Run {current_run_number} FAILED: Parsing hyperopt-show output failed.")
+                        parsed_result = parse_hyperopt_show_output(hyperopt_show_stdout, run_params, current_run_number, reported_random_state)
                     except Exception as e:
                         print(f"ERROR: Saving/Parsing hyperopt-show output: {e}")
                         traceback.print_exc()
+                        parsed_result = None
                 else:
                     print(f"Run {current_run_number} FAILED: hyperopt-show command failed.")
             else:
@@ -520,32 +609,28 @@ if __name__ == "__main__":
                 print(f"Run {current_run_number} results appended to results sheet.")
             else:
                 failed_runs_count += 1
+                print(f"Run {current_run_number} FAILED: Failed to write results to sheet.")
         else:
             failed_runs_count += 1
             print("Attempting to write partial data...")
             partial_result = {header: "FAILED" for header in RESULT_HEADERS}
-            if "Run #" in RESULT_HEADERS:
-                partial_result["Run #"] = str(current_run_number)
-            if "Strategy" in RESULT_HEADERS:
-                partial_result["Strategy"] = get_value_from_dict(run_params, "strategy_name", "N/A")
-            if "Config" in RESULT_HEADERS:
-                partial_result["Config"] = get_value_from_dict(run_params, "config_filename")
-            if "Epochs" in RESULT_HEADERS:
-                partial_result["Epochs"] = get_value_from_dict(run_params, "epochs")
-            if "random-state" in RESULT_HEADERS:
-                partial_result["random-state"] = reported_random_state if reported_random_state is not None else "N/A"
-            if "Timerange" in RESULT_HEADERS:
-                partial_result["Timerange"] = get_value_from_dict(run_params, "timerange")
-            if "Pairs" in RESULT_HEADERS:
-                partial_result["Pairs"] = get_value_from_dict(run_params, "Pairs", "N/A")
-            if "loss_function" in RESULT_HEADERS:
-                partial_result["loss_function"] = get_value_from_dict(run_params, "loss_function", DEFAULT_LOSS_FUNCTION)
-            if "Leverage" in RESULT_HEADERS:
-                partial_result["Leverage"] = get_value_from_dict(run_params, "Leverage", "N/A")
-            if "% per trade" in RESULT_HEADERS:
-                partial_result["% per trade"] = get_value_from_dict(run_params, "% per trade", "N/A")
+            partial_result.update({
+                "Run #": str(current_run_number),
+                "Strategy": get_value_from_dict(run_params, "strategy_name", "N/A"),
+                "Config": get_value_from_dict(run_params, "config_filename", DEFAULT_CONFIG_FILENAME),
+                "Epochs": get_value_from_dict(run_params, "epochs"),
+                "random-state": reported_random_state if reported_random_state is not None else "N/A",
+                "Timerange": get_value_from_dict(run_params, "timerange"),
+                "Pairs": get_value_from_dict(run_params, "Pairs", "N/A"),
+                "loss_function": get_value_from_dict(run_params, "loss_function", DEFAULT_LOSS_FUNCTION),
+                "Leverage": get_value_from_dict(run_params, "Leverage", "N/A"),
+                "% per trade": get_value_from_dict(run_params, "% per trade", "N/A"),
+                "Date and Time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            })
             if write_results_to_row(results_worksheet, partial_result):
                 print(f"Run {current_run_number} partial data appended to results sheet.")
+            else:
+                print(f"Run {current_run_number} FAILED: Failed to write partial data to sheet.")
         
         print(f"======= End Run {current_run_number} =======")
     
