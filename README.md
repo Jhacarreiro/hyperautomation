@@ -13,7 +13,9 @@ Results: "Trades #", "% Win", "Avg. Profit %", "Profit %", "Duration min", "Draw
 Make sure to match the config and result headers with the dictionary in the script.
 
 Example config gsheet:
-![image](https://github.com/user-attachments/assets/7ce0404c-b97d-4611-8ba7-a2e5c59917d6)
+![image](https://github.com/user-attachments/assets/ea26c396-8d0e-4af7-bad5-c11609488856)
+
 
 Example result gsheet:
-![image](https://github.com/user-attachments/assets/9e5eb35c-63db-41ab-9285-200861692057)
+![image](https://github.com/user-attachments/assets/bfe5d07d-ac33-4e1d-8b7a-235242ec2463)
+
