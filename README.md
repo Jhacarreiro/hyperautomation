@@ -1,4 +1,6 @@
 # hyperautomation
+
+Legacy research utility for queuing Freqtrade hyperopt runs and collecting their results. Read the configuration notes before use; this is not presented as a maintained production trading system.
 Script to automate the run of various hyperopt sessions in a row.
 
 Script reads data from the result page from the terminal, the result file created by hyper and the config ghseet. In the future the manual fields from the config gsheet can come from the strategy file and freqtrade config file.
